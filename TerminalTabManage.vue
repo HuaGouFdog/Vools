@@ -1,5 +1,8 @@
 <template>
   <div class="tabs">
+    <!-- 拖拽预览线 -->
+    <div v-if="dragOverIndex !== null" class="drag-preview-line" :style="dragPreviewLineStyle"></div>
+    
     <!-- 标签预览 -->
     <div v-if="previewTab" class="tab-preview" :style="previewStyle">
       <div class="preview-header">{{ previewTab.label }} - 备注</div>
@@ -61,9 +64,10 @@
 
     <!-- 右键菜单 -->
     <ul
+        style="font-size: 12px; border-radius: 10px"
         v-if="contextMenu.visible"
         class="context-menu"
-        :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+        :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px'}"
     >
       <li @click="closeTab(contextMenu.tab)">关闭当前</li>
       <li @click="closeOthers(contextMenu.tab)">关闭其他</li>
@@ -79,6 +83,11 @@ import ConnectManage from './ConnectManage.vue'
 // 拖拽状态
 const draggedIndex = ref(null)
 const dragOverIndex = ref(null)
+const dragPreviewLineStyle = ref({
+  left: '0px',
+  height: '0px',
+  top: '0px'
+})
 
 // 预览状态
 const previewTab = ref(null)
@@ -229,6 +238,7 @@ function handleDragOver(index, event) {
   
   if (draggedIndex.value !== null && draggedIndex.value !== index) {
     dragOverIndex.value = index
+    updateDragPreviewLine(event.currentTarget)
   }
 }
 
@@ -241,6 +251,31 @@ function handleDragEnter(index, event) {
   
   if (draggedIndex.value !== null && draggedIndex.value !== index) {
     dragOverIndex.value = index
+    updateDragPreviewLine(event.currentTarget)
+  }
+}
+
+// 更新拖拽预览线位置
+function updateDragPreviewLine(element) {
+  if (!element) return
+  
+  const rect = element.getBoundingClientRect()
+  const tabHeaderRect = tabHeader.value.getBoundingClientRect()
+  
+  // 如果拖拽的索引小于目标索引，预览线显示在目标右侧
+  if (draggedIndex.value < dragOverIndex.value) {
+    dragPreviewLineStyle.value = {
+      left: (rect.right) + 'px',
+      height: rect.height + 'px',
+      top: rect.top + 'px'
+    }
+  } else {
+    // 否则显示在左侧
+    dragPreviewLineStyle.value = {
+      left: (rect.left) + 'px',
+      height: rect.height + 'px',
+      top: rect.top + 'px'
+    }
   }
 }
 
@@ -315,6 +350,11 @@ function showPreview(tab, index, event) {
       return
     }
     
+    // 如果只有一个标签页，不显示预览
+    if (tabs.value.length <= 1) {
+      return
+    }
+    
     // 计算预览位置
     const rect = event.target.getBoundingClientRect()
     previewStyle.value = {
@@ -324,7 +364,7 @@ function showPreview(tab, index, event) {
     
     // 设置预览内容
     previewTab.value = tab
-  }, 500) // 500ms 延迟
+  }, 1000) // 1000ms (1秒) 延迟
 }
 
 // 隐藏预览
@@ -333,10 +373,8 @@ function hidePreview() {
     clearTimeout(previewTimer.value)
   }
   
-  // 设置延迟隐藏预览，避免鼠标移动到预览框时立即消失
-  previewTimer.value = setTimeout(() => {
-    previewTab.value = null
-  }, 300) // 300ms 延迟
+  // 立即隐藏预览
+  previewTab.value = null
 }
 
 onMounted(() => {
@@ -398,16 +436,19 @@ onMounted(() => {
 }
 
 .tab-item.history-tab {
-  background-color: #2d4b65;
-  border-bottom: 2px solid #00a2ff;
+  background: #0078d4;
+  border-bottom: none;
   cursor: default;
+  color: #fff;
 }
 
 .tab-item.history-tab.active {
-  background-color: #1e3a52;
+  background: #0078d4;
+  border-bottom: none;
+  color: #fff;
 }
 
-.tab-item.active {
+.tab-item.active:not(.history-tab) {
   background: #1e1e1e;
   font-weight: bold;
   border-bottom: 2px solid #0078d4;
@@ -487,6 +528,16 @@ onMounted(() => {
 
 .context-menu li:hover {
   background: #0078d4;
+}
+
+/* 拖拽预览线样式 */
+.drag-preview-line {
+  position: fixed;
+  width: 2px;
+  background-color: #0078d4;
+  box-shadow: 0 0 5px rgba(0, 120, 212, 0.7);
+  z-index: 1000;
+  pointer-events: none;
 }
 
 /* 标签预览样式 */
