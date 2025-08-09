@@ -14,7 +14,7 @@
     <div class="tab-header" ref="tabHeader">
       <!-- 标签列表 -->
       <div
-          v-for="(tab, index) in tabs"
+          v-for="(tab, index) in tabs.filter(tab => !tab.hidden)"
           :key="tab.name"
           class="tab-item"
           :class="{ 
@@ -22,7 +22,7 @@
             'history-tab': tab.name === 'connect',
             'drag-over': dragOverIndex === index && draggedIndex !== index
           }"
-          :style="{ lineHeight: '30px'}"
+          :style="{ lineHeight: '25px'}"
           @click="activeTab = tab.name"
           @contextmenu.prevent="openContextMenu($event, tab.name)"
           :draggable="tab.name !== 'connect'"
@@ -42,7 +42,7 @@
       <!-- 固定的添加按钮 -->
       <div
           class="tab-add"
-          :style="{ lineHeight: '30px', width: tabWidth + 'px' }"
+          :style="{ lineHeight: '25px', width: tabWidth + 'px' }"
           @click="addTab"
       >
         ＋
@@ -50,14 +50,20 @@
     </div>
 
     <!-- 内容区域 -->
-    <div class="tab-content" :style="{ top: headerHeight + 'px' }">
+    <div class="tab-content" :style="{ top: headerHeight + 'px', bottom: '0px', left: '0px', right: '0px' }">
       <div
           v-for="tab in tabs"
           :key="tab.name"
-          v-show="activeTab === tab.name"
+          v-show="activeTab === tab.name || tab.hidden"
           class="tab-pane"
+          :style="{ visibility: tab.hidden ? 'hidden' : 'visible', position: tab.hidden ? 'absolute' : 'relative', zIndex: tab.hidden ? -1 : 'auto' }"
       >
-        <component v-if="tab.component" :is="tab.component" />
+        <!-- 恢复所有组件 -->
+        <component 
+          v-if="tab.component" 
+          :is="tab.component" 
+          :key="`${tab.name}-${tab.uniqueId || ''}`"
+        />
         <template v-else>{{ tab.content }}</template>
       </div>
     </div>
@@ -77,8 +83,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, onMounted, nextTick, watch, markRaw, defineAsyncComponent } from 'vue'
+// 恢复快速连接组件的导入
 import ConnectManage from './ConnectManage.vue'
+
+// 使用异步组件加载终端分割器，避免重复实例化
+const TerminalHSplitter = defineAsyncComponent(() => 
+  import('./TerminalHSplitter.vue')
+)
 
 // 拖拽状态
 const draggedIndex = ref(null)
@@ -98,22 +110,54 @@ const previewStyle = ref({
 const previewTimer = ref(null)
 
 const tabs = ref([
-  { name: 'connect', label: '历史连接', component: ConnectManage, remark: '这里显示历史连接的备注信息，可以记录重要的连接信息和使用说明。' },
-  { name: 'tab2', label: '标签 2', content: '这是标签 2 的内容', remark: '这是标签2的备注信息，可以记录一些重要的笔记和提醒。' }
+  { 
+    name: 'connect', 
+    label: '快速连接', 
+    component: markRaw(ConnectManage), // 恢复组件引用
+    remark: '这里显示快速连接的备注信息，可以记录重要的连接信息和使用说明。' 
+  },
+  // 恢复预加载的隐藏终端标签
+  { 
+    name: 'preloaded', 
+    label: '预加载终端', 
+    component: markRaw(TerminalHSplitter), 
+    remark: '预加载终端，确保终端在启动时就初始化好', 
+    hidden: true,
+    uniqueId: 'preloaded-terminal'
+  }
 ])
 
 const activeTab = ref('connect')
 
 // 标签页配置
 const tabHeader = ref(null)
-const headerHeight = ref(30)
+const headerHeight = ref(25)
 const tabWidth = 120
 
 // 监听标签变化，重新计算标签栏高度
 watch(tabs, async () => {
   await nextTick()
   updateHeaderHeight()
+  
+  // 标签变化时触发终端重新适配事件
+  const delays = [50, 200, 500];
+  delays.forEach(delay => {
+    setTimeout(() => {
+      window.dispatchEvent(new Event('terminal-resize'));
+    }, delay);
+  });
 }, { deep: true })
+
+// 监听活动标签变化
+watch(activeTab, () => {
+  // 标签切换时触发终端重新适配事件
+  const delays = [50, 200, 500];
+  delays.forEach(delay => {
+    setTimeout(() => {
+      window.dispatchEvent(new Event('terminal-resize'));
+    }, delay);
+  });
+})
 
 // 计算标签栏的实际高度
 function updateHeaderHeight() {
@@ -140,50 +184,98 @@ function openContextMenu(e, tabName) {
 
 // 关闭标签
 function closeTab(name) {
-  const index = tabs.value.findIndex(tab => tab.name === name)
+  // 不允许关闭预加载的隐藏终端标签
+  if (name === 'preloaded') {
+    return;
+  }
+  
+  // 如果当前有预览窗口，先隐藏它
+  hidePreview();
+  
+  // 在关闭标签前，获取所有可见标签
+  const visibleTabs = tabs.value.filter(tab => !tab.hidden);
+  
+  // 找到当前关闭标签在可见标签中的索引
+  const visibleIndex = visibleTabs.findIndex(tab => tab.name === name);
+  
+  // 保存当前是否是激活标签
+  const isActiveTab = activeTab.value === name;
+  
+  // 关闭标签
+  const index = tabs.value.findIndex(tab => tab.name === name);
   if (index !== -1) {
-    tabs.value.splice(index, 1)
-    if (activeTab.value === name) {
-      if (tabs.value[index]) {
-        activeTab.value = tabs.value[index].name
-      } else if (tabs.value[index - 1]) {
-        activeTab.value = tabs.value[index - 1].name
+    tabs.value.splice(index, 1);
+    
+    // 如果关闭的是当前激活的标签，需要激活另一个标签
+    if (isActiveTab) {
+      // 获取更新后的可见标签列表
+      const updatedVisibleTabs = tabs.value.filter(tab => !tab.hidden);
+      
+      if (updatedVisibleTabs.length > 0) {
+        // 尝试激活前一个标签
+        if (visibleIndex > 0 && visibleIndex <= updatedVisibleTabs.length) {
+          // 激活前一个标签
+          activeTab.value = updatedVisibleTabs[visibleIndex - 1].name;
+        } 
+        // 如果关闭的是第一个标签，激活新的第一个标签
+        else if (visibleIndex === 0 && updatedVisibleTabs.length > 0) {
+          activeTab.value = updatedVisibleTabs[0].name;
+        }
+        // 其他情况，激活第一个可见标签
+        else {
+          activeTab.value = updatedVisibleTabs[0].name;
+        }
       } else {
-        activeTab.value = ''
+        // 如果没有可见标签，设置为空
+        activeTab.value = '';
       }
     }
   }
   
-  // 如果所有标签页都关闭了，自动创建历史连接标签页
-  if (tabs.value.length === 0) {
-    createConnectTab()
+  // 检查是否还有可见的标签页（除了快速连接标签）
+  const visibleNonConnectTabs = tabs.value.filter(tab => !tab.hidden && tab.name !== 'connect');
+  
+  // 如果没有可见的非快速连接标签，并且也没有快速连接标签，则创建快速连接标签
+  const hasConnectTab = tabs.value.some(tab => tab.name === 'connect');
+  if (visibleNonConnectTabs.length === 0 && !hasConnectTab) {
+    createConnectTab();
   }
   
-  hideContextMenu()
+  hideContextMenu();
 }
 
-// 创建历史连接标签页
+// 创建快速连接标签页
 function createConnectTab() {
-  tabs.value.push({
+  // 始终将快速连接标签添加到数组的开头
+  tabs.value.unshift({
     name: 'connect',
-    label: '历史连接',
-    component: ConnectManage,
-    remark: '这里显示历史连接的备注信息，可以记录重要的连接信息和使用说明。'
+    label: '快速连接',
+    component: markRaw(ConnectManage), // 恢复组件引用
+    remark: '这里显示快速连接的备注信息，可以记录重要的连接信息和使用说明。'
   })
   activeTab.value = 'connect'
 }
 
 // 关闭其他
 function closeOthers(name) {
-  tabs.value = tabs.value.filter(tab => tab.name === name)
+  // 隐藏预览窗口
+  hidePreview()
+  
+  // 保留当前标签和预加载的隐藏终端标签
+  tabs.value = tabs.value.filter(tab => tab.name === name || tab.name === 'preloaded')
   activeTab.value = name
   hideContextMenu()
 }
 
 // 关闭全部
 function closeAll() {
-  tabs.value = []
-  // 关闭全部后自动创建历史连接标签页
+  // 隐藏预览窗口
+  hidePreview()
+  
+  // 只保留预加载的隐藏终端标签
+  tabs.value = tabs.value.filter(tab => tab.name === 'preloaded')
+  
+  // 关闭全部后自动创建快速连接标签页
   createConnectTab()
   hideContextMenu()
 }
@@ -197,27 +289,39 @@ function hideContextMenu() {
 let tabCounter = 3
 function addTab() {
   const newName = `tab${tabCounter++}`
+  const uniqueId = `terminal-${Date.now()}`
+  
+  // 恢复使用TerminalHSplitter组件
   const newTab = {
     name: newName,
     label: `标签 ${tabCounter - 1}`,
-    content: `这是标签 ${tabCounter - 1} 的内容`,
-    remark: `这是标签 ${tabCounter - 1} 的备注信息，可以在这里添加一些重要的笔记、提醒或者使用说明。`
+    component: markRaw(TerminalHSplitter),
+    remark: `这是标签 ${tabCounter - 1} 的备注信息，可以在这里添加一些重要的笔记、提醒或者使用说明。`,
+    uniqueId: uniqueId // 添加唯一ID，确保每个终端实例都是独立的
   }
   
-  // 检查历史连接标签页是否存在
-  const connectIndex = tabs.value.findIndex(tab => tab.name === 'connect')
+  // 找到预加载标签的索引
+  const preloadedIndex = tabs.value.findIndex(tab => tab.name === 'preloaded')
   
-  if (connectIndex === -1) {
-    // 如果不存在历史连接标签页，先创建它
-    createConnectTab()
-    // 然后在它后面添加新标签
-    tabs.value.splice(1, 0, newTab)
+  // 将新标签添加到预加载标签之前（如果存在），否则添加到末尾
+  if (preloadedIndex !== -1) {
+    tabs.value.splice(preloadedIndex, 0, newTab)
   } else {
-    // 如果存在历史连接标签页，在它后面添加新标签
-    tabs.value.splice(connectIndex + 1, 0, newTab)
+    tabs.value.push(newTab)
   }
   
+  // 激活新标签
   activeTab.value = newName
+  
+  // 添加标签后，使用多个延迟触发终端重新适配事件，确保DOM已完全更新
+  const delays = [100, 300, 500, 1000];
+  delays.forEach(delay => {
+    setTimeout(() => {
+      window.dispatchEvent(new Event('terminal-resize'));
+    }, delay);
+  });
+  
+  console.log(`添加了新标签: ${newName}, ID: ${uniqueId}`);
 }
 
 // 拖拽开始
@@ -260,7 +364,6 @@ function updateDragPreviewLine(element) {
   if (!element) return
   
   const rect = element.getBoundingClientRect()
-  const tabHeaderRect = tabHeader.value.getBoundingClientRect()
   
   // 如果拖拽的索引小于目标索引，预览线显示在目标右侧
   if (draggedIndex.value < dragOverIndex.value) {
@@ -307,11 +410,11 @@ function handleDragEnd() {
 function drop(targetIndex, event) {
   const sourceIndex = parseInt(event.dataTransfer.getData('text/plain'))
   
-  // 检查是否是历史连接标签页
+  // 检查是否是快速连接标签页
   const isSourceConnect = tabs.value[sourceIndex].name === 'connect'
   const isTargetConnect = tabs.value[targetIndex].name === 'connect'
   
-  // 如果源标签是历史连接或目标位置是历史连接的位置（第一个），则不执行拖拽
+  // 如果源标签是快速连接或目标位置是快速连接的位置（第一个），则不执行拖拽
   if (isSourceConnect || (targetIndex === 0 && !isTargetConnect)) {
     // 重置拖拽状态
     draggedIndex.value = null
@@ -326,7 +429,7 @@ function drop(targetIndex, event) {
     // 从数组中移除该标签
     tabs.value.splice(sourceIndex, 1)
     
-    // 在目标位置插入该标签，确保不会插入到历史连接标签页之前
+    // 在目标位置插入该标签，确保不会插入到快速连接标签页之前
     const actualTargetIndex = targetIndex === 0 ? 1 : targetIndex
     tabs.value.splice(actualTargetIndex, 0, movedTab)
   }
@@ -371,10 +474,17 @@ function showPreview(tab, index, event) {
 function hidePreview() {
   if (previewTimer.value) {
     clearTimeout(previewTimer.value)
+    previewTimer.value = null
   }
   
   // 立即隐藏预览
   previewTab.value = null
+  
+  // 重置预览样式
+  previewStyle.value = {
+    top: '0px',
+    left: '0px'
+  }
 }
 
 onMounted(() => {
@@ -385,13 +495,17 @@ onMounted(() => {
 
 <style scoped>
 .tabs {
-  position: relative;
+  position: absolute;
   display: flex;
   flex-direction: column;
   border: none;
   height: 100%;
   width: 100%;
-  background-color: rgba(36, 189, 120, 0.67);
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
   color: #eaeaea;
 }
 
@@ -497,16 +611,25 @@ onMounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  overflow: auto;
+  top: 25px; /* 与 headerHeight 保持一致 */
+  overflow: hidden; /* 改为 hidden，防止出现滚动条 */
   padding: 0;
   background-color: rgb(80, 91, 109);
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: #555 #2a2a2a; /* Firefox */
 }
 
 .tab-pane {
   height: 100%;
   width: 100%;
-  padding: 10px;
+  padding: 0;
   box-sizing: border-box;
+  overflow: hidden; /* 防止内容溢出 */
+  position: absolute; /* 使用绝对定位填充整个容器 */
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
 
 .context-menu {
@@ -569,5 +692,7 @@ onMounted(() => {
   flex: 1;
   max-height: 160px;
   font-size: 12px;
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: #555 #2a2a2a; /* Firefox */
 }
 </style>
